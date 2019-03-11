@@ -1,0 +1,16 @@
+{
+  "name": "mailchimp-to-upsales",
+  "version": "1.0.0",
+  "description": "Exports subscribers from Mailchimp and imports them to Upsales.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "mailchimp-api-v3": "^1.12.1",
+    "superagent": "^4.1.0",
+    "winston": "^3.2.1"
+  }
+}
