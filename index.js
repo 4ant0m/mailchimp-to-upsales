@@ -24,13 +24,6 @@ const config = require(`./config`);
     //await integrator.clearCompany();
     console.log(await integrator.upsales.company.getAll())
     //console.log(await integrator.upsales.contacts.get())
-    await integrator.integrateTest();
-
-    console.log(await integrator.upsales.company.getAll())
     //console.log(await integrator.mailchimp.getLists())
     //console.log(await integrator.integrate())
-
-
-
-
 })();
