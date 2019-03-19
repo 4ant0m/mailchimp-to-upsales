@@ -1,6 +1,7 @@
 const Upsales = require('./upsales-sdk');
 const Mailchimp = require('./mailchimp-sdk');
 const logger = require(`./lib/log`);
+const PRIVATE_EMAILS = require(`./private-emails`);
 
 class Integrator {
     constructor (data) {
@@ -22,130 +23,205 @@ class Integrator {
     }
 
     static parseEmail (email) {
-        let domain = Integrator.jsUcfirst(email.replace(/.*@/, "")).split(`.`)[0],
+        let domain = email.replace(/.*@/, "").toLowerCase(),
+            domains = Integrator.jsUcfirst(email.replace(/.*@/, "")).split(`.`),
             names = email.replace(/@.*$/, "").split(`.`),
             firstname = Integrator.jsUcfirst(names[0]),
             lastname = Integrator.jsUcfirst(names[1]);
 
         return {
-            domain,
+            domains,
             names,
             firstname,
-            lastname
+            lastname,
+            domain
         }
     };
 
-    async prepareData () {
-        this.logger.mailchimp.action(`Getting all subscribers`);
-        let mailchimp = this.mailchimp,
-            subscribers = await mailchimp.getAllSubscribers(),
-            companies = [],
-            self = this;
-        this.logger.mailchimp.success(`Subscribers was received`);
-        this.logger.integrator.action(`Preparing data for Upsales`);
-        let contacts = subscribers.map((subscriber) => {
-            let parsedEmail = Integrator.parseEmail(subscriber.email_address),
-                firstName = subscriber.merge_fields.FNAME || parsedEmail.firstname || ``,
-                lastName = subscriber.merge_fields.LNAME || parsedEmail.lastname || ``,
-                name = `${firstName} ${lastName}`,
-                email = subscriber.email_address,
-                client = {
-                    name: parsedEmail.domain
-                };
+    static checkPrivateEmail (contact) {
+        return PRIVATE_EMAILS.indexOf(Integrator.parseEmail(contact.email).domain) != -1
+    }
 
-            if (!companies.find((company) => company.name.toLowerCase() == parsedEmail.domain.toLowerCase())) {
-                companies.push({
-                    name: parsedEmail.domain
-                })
-            }
+    filterPrivateEmails (contacts) {
+        let publicEmails = [];
+        let privateEmails = contacts.filter(contact => {
+            return Integrator.checkPrivateEmail(contact)
+        });
+        return {
+            publicEmails,
+            privateEmails
+        }
+    }
+
+    prepareContactsFromMembers (members) {
+        let contacts = members.map((member) => {
+            let parsedEmail = Integrator.parseEmail(member.email_address),
+                firstName = member.merge_fields.FNAME || parsedEmail.firstname || ``,
+                lastName = member.merge_fields.LNAME || parsedEmail.lastname || ``,
+                name = `${firstName} ${lastName}`,
+                email = member.email_address,
+                client = {
+                    name: Integrator.checkPrivateEmail({email: email}) ? `Private emails` : parsedEmail.domains[0],
+                },
+                projects = [];
+
             return {
                 firstName,
                 lastName,
                 name,
                 email,
-                client
+                client,
+                projects
             }
         });
+        return contacts
+    }
+
+    prepareCompaniesFromMembers (members) {
+        let companies = [];
+        members.forEach((member) => {
+            let parsedEmail = Integrator.parseEmail(member.email_address);
+            if (!companies.find((company) => company.name.toLowerCase() == parsedEmail.domains[0].toLowerCase())) {
+                companies.push({
+                    name: Integrator.checkPrivateEmail({email: member.email_address}) ? `Private emails` : parsedEmail.domains[0]
+                })
+            }
+        });
+        return companies
+    }
+
+    async prepareCampaignsFromLists (lists) {
+        let campaigns = [];
+
+        for (let i = 0; i < lists.length; i++) {
+            let members = await this.mailchimp.getMembersFromList(lists[i].id);
+            campaigns.push({
+                name: lists[i].name,
+                contacts: this.prepareContactsFromMembers(members)
+            })
+        }
+        return campaigns
+    }
+
+    async prepareData () {
+        this.logger.mailchimp.action(`Getting all subscribers`);
+        let subscribers = await this.mailchimp.getAllSubscribers();
+        this.logger.mailchimp.action(`Getting all lists`);
+        let lists = await this.mailchimp.getLists();
+
+        this.logger.integrator.action(`Preparing data for Upsales`);
+
+        let contacts = this.prepareContactsFromMembers(subscribers),
+            companies = this.prepareCompaniesFromMembers(subscribers),
+            campaigns = await this.prepareCampaignsFromLists(lists),
+            privateContacts = this.filterPrivateEmails(contacts).privateEmails,
+            publicContacts = this.filterPrivateEmails(contacts).publicEmails;
+
+        campaigns.forEach(campaign => {
+            contacts.forEach(contact => {
+                if (campaign.contacts.find(item => item.email == contact.email)) {
+                  contact.projects.push({name: campaign.name})
+                }
+            })
+        });
+
         return {
             companies,
-            contacts
+            contacts,
+            campaigns,
+            privateContacts,
+            publicContacts
         }
     };
 
-    async checkDuplicates (resource, params) {
-        this.logger.upsales.action(`Checking ${resource} duplicates with such params ${JSON.stringify(params)}`);
-        let result = await this.upsales[resource].get(params);
-        return result.metadata.total !== 0 ? result.data[0] : false
+    async checkDuplicates (resource, param, data) {
+        this.logger.upsales.action(`Checking ${resource} duplicates with such param ${param}`);
+        let results = await this.upsales[resource].getAll();
+
+        let filteredData = data.filter((item) =>
+            results.data.find((result) => result[param] == item[param]) == null
+        );
+
+        return filteredData
     };
 
     async createCompanies (companies) {
         this.logger.upsales.action(`Creating companies`);
-        let ids = [],
-            results = [];
-        for (let i = 0; i < companies.length; i++) {
-            let company = await this.checkDuplicates(`company`, {name: companies[i].name})
-                || await this.upsales.company.create(companies[i]);
-            company = company && company.data || company;
+        let results = [];
+        let filteredCompany = await this.checkDuplicates(`company`, `name`, companies);
+
+        for (let i = 0; i < filteredCompany.length; i++) {
+            let company = (await this.upsales.company.create(filteredCompany[i])).data;
+
             this.logger.upsales.success(`Created company - name: ${company.name}`);
-            if (ids.indexOf(company.id) == -1) {
-                ids.push(company.id);
-                results.push({
-                    id: company.id,
-                    name: company.name
-                })
-            }
+            results.push(company)
         }
         return results
     };
 
-    async createContacts (contacts, companies) {
+    async createContacts (contacts) {
         this.logger.upsales.action(`Creating contacts`);
-        let results = [];
-        for (let i = 0; i < contacts.length; i++) {
-            contacts[i].client = companies.find((company) =>
-            company.name.toLowerCase() === contacts[i].client.name.toLowerCase());
-            let contact = await this.checkDuplicates(`contacts`, {email: contacts[i].email})
-                || await this.upsales.contacts.create(contacts[i]);
-            contact = contact && contact.data || contact;
+        let results = [],
+            filteredContacts = await this.checkDuplicates(`contacts`, `email`, contacts),
+            companies = (await this.upsales.company.getAll()).data || [],
+            campaigns = (await this.upsales.campaign.getAll()).data || []
+
+        for (let i = 0; i < filteredContacts.length; i++) {
+            filteredContacts[i].client = companies.find((company) =>
+            company.name.toLowerCase() === filteredContacts[i].client.name.toLowerCase());
+
+            let projects = filteredContacts[i].projects.map((project) => {
+                return campaigns.find((campaign) =>
+                campaign.name.toLowerCase() === project.name.toLowerCase())
+            });
+
+            filteredContacts[i].projects = projects;
+
+            let contact = (await this.upsales.contacts.create(filteredContacts[i])).data;
+
             results.push(contact);
             this.logger.upsales.success(`Created contact - email: ${contact.email}, firstName: ${contact.firstName}, lastName: ${contact.lastName}`)
         }
+
         return results
     };
 
-    async clearResourceByParams (resource, duplicates, params) {
-        this.logger.upsales.action(`Clearing ${resource} by params ${JSON.stringify(params)}`);
+    async createCampaigns (campaigns) {
+        this.logger.upsales.action(`Creating campaign`);
         let results = [];
-        for (let i = 0; i < duplicates.length; i++) {
-            for (let k = 0; k < 1000; k++) {
-                let searchParams = {},
-                    duplicate;
-                params.forEach(param => {
-                    searchParams[param] = duplicates[i][param]
-                });
-                duplicate = await this.checkDuplicates(resource, searchParams);
+        let filtered = await this.checkDuplicates(`campaign`, `name`, campaigns);
 
-                if (duplicate) {
-                    this.logger.upsales.action(`Deleting ${resource}: ${duplicate.name} `);
-                    results.push(await this.upsales[resource].delete({id: duplicate.id}));
-                }
-                else {
-                    break
-                }
-            }
+        for (let i = 0; i < filtered.length; i++) {
+            let result = (await this.upsales.campaign.create(filtered[i])).data;
+
+            this.logger.upsales.success(`Created campaign - name: ${result.name}`);
+            results.push(result)
+        }
+        return results
+    }
+
+    async clearResource (resource) {
+        this.logger.upsales.action(`Clearing ${resource}`);
+        let results = [],
+            duplicates = (await this.upsales[resource].getAll()).data;
+
+        for (let i = 0; i < duplicates.length; i++) {
+            this.logger.upsales.action(`Deleting ${resource}: ${duplicates[i].name} `);
+            results.push(await this.upsales[resource].delete({id: duplicates[i].id}));
         }
         return results
     };
 
-    async clearDuplicateContacts () {
-        let data = await this.prepareData();
-        return await this.clearResourceByParams(`contacts`, data.contacts, [`email`]);
+    async clearContacts () {
+        return await this.clearResource(`contacts`);
     }
 
-    async clearDuplicateCompany () {
-        let data = await this.prepareData();
-        return await this.clearResourceByParams(`company`, data.companies, [`name`]);
+    async clearCampaign () {
+        return await this.clearResource(`campaign`);
+    }
 
+    async clearCompany () {
+        return await this.clearResource(`company`);
     }
 
     async integrate () {
@@ -156,13 +232,18 @@ class Integrator {
             this.logger.integrator.success(`Created companies:`);
             this.logger.integrator.info(companies);
 
-            let contacts = await this.createContacts(data.contacts, companies);
+            let campaigns = await this.createCampaigns(data.campaigns);
+            this.logger.integrator.success(`Created campaigns:`);
+            this.logger.integrator.info(campaigns);
+
+            let contacts = await this.createContacts(data.contacts);
             this.logger.integrator.success(`Created contacts:`);
             this.logger.integrator.info(contacts);
 
             return {
                 companies,
-                contacts
+                contacts,
+                campaigns
             }
         } catch (e) {
             this.logger.integrator.error(e.message)

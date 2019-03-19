@@ -20,6 +20,17 @@ class Mailchimp extends MailchimpV3 {
         }
     };
 
+    async getMembersFromList(listId) {
+        try {
+            let result = await this.get({
+                path: `/lists/${listId}/members/`
+            });
+            return result.members
+        } catch (e) {
+            throw e
+        }
+    }
+
     async getAllSubscribers () {
         try {
             let lists = await this.getLists(),

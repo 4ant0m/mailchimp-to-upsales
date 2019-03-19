@@ -32,12 +32,36 @@ class Upsales {
             if (!RESOURCES.hasOwnProperty(resource)) {
                 continue;
             }
-            Upsales.prototype[resource][method] = this.makeRequest.bind(this, resource, methods[method]);
+            if (method == `getAll`) {
+                Upsales.prototype[resource][method] = this.getAll.bind(this, resource);
+            } else
+                Upsales.prototype[resource][method] = this.makeRequest.bind(this, resource, methods[method]);
         }
     }
 
     _getAPILink (resource) {
         return `${this.link}${RESOURCES[resource]}`
+    }
+
+    async getAll (resource, params = {}) {
+        let offset = 1000,
+            result = {
+                data: [],
+                metadata: {}
+            };
+        params.offset = 0;
+        params.limit = offset;
+        for (let i = 0; i < 1000000; i++) {
+            let data = await this.makeRequest(resource, `get`, params);
+            if (data.data.length == 0) {
+                break
+            }
+            result.metadata.total = data.metadata.total
+            result.error = data.error;
+            result.data = result.data.concat(data.data);
+            params.offset += offset
+        }
+        return result
     }
 
     async makeRequest (resource, method, params) {

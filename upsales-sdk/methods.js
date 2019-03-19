@@ -6,7 +6,8 @@ const METHODS = {
     create: `post`,
     update: `put`,
     delete: `del`,
-    get: `get`
+    get: `get`,
+    getAll: `get`
 };
 
 module.exports = METHODS;

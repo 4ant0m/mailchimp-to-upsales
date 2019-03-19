@@ -12,5 +12,8 @@
     "mailchimp-api-v3": "^1.12.1",
     "superagent": "^4.1.0",
     "winston": "^3.2.1"
+  },
+  "devDependencies": {
+    "jest": "^24.5.0"
   }
 }

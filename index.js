@@ -15,4 +15,22 @@ const config = require(`./config`);
     });
 
     await integrator.integrate()
+   /* console.log(await integrator.upsales.company.get())
+    console.log(await integrator.upsales.contacts.get())
+
+    await integrator.clearDuplicateCompany();
+    await integrator.clearDuplicateContacts();
+*/
+    //await integrator.clearCompany();
+    console.log(await integrator.upsales.company.getAll())
+    //console.log(await integrator.upsales.contacts.get())
+    await integrator.integrateTest();
+
+    console.log(await integrator.upsales.company.getAll())
+    //console.log(await integrator.mailchimp.getLists())
+    //console.log(await integrator.integrate())
+
+
+
+
 })();

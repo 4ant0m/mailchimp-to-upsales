@@ -3,7 +3,8 @@
  */
 const RESOURCES = {
     company: `/accounts`,
-    contacts: `/contacts`
+    contacts: `/contacts`,
+    campaign: `/projects`
 };
 
 module.exports = RESOURCES;
